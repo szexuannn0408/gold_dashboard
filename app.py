@@ -33,7 +33,7 @@ html, body, [class*="css"], .stMarkdown, p, li {
   font-variant-numeric: tabular-nums;
 }
 .stApp { background: #fbfbf8; color: #1c1c18; }
-.block-container { max-width: 1180px; padding-top: 1.2rem; padding-bottom: 1rem; }
+.block-container { max-width: 1180px; padding-top: 1.2rem; padding-bottom: 0.2rem; }
 #MainMenu, footer, header[data-testid="stHeader"] { visibility: hidden; }
 
 h1 { font-family: 'Newsreader', serif; font-weight: 500; letter-spacing: -.01em;
@@ -63,7 +63,17 @@ h3 { font-family: 'Newsreader', serif; font-style: italic; font-weight: 500;
 .grammar b { color: #1c1c18; font-weight: 500; }
 .masthead { display: flex; justify-content: space-between; align-items: baseline; }
 .masthead .d { color: #8c8c84; font-size: 13px; }
-.ctitle { font-weight: 600; font-size: 15px; margin: 6px 0 -6px; }
+.ctitle { font-weight: 600; font-size: 15px; margin: 8px 0 -6px; color: #1c1c18; }
+.xhead { font-family: 'Newsreader', serif; font-size: 1.7rem; font-weight: 500;
+         line-height: 1.15; margin-top: 4px; }
+.xtake { font-size: 15px; color: #4a4a43; margin-top: 6px; }
+.xtake b { color: #1c1c18; font-weight: 600; }
+.xcards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin: 10px 0 4px; }
+.xcard { background: #ffffff; border: 1px solid #e7e5dc; border-left: 4px solid;
+         border-radius: 8px; padding: 8px 14px 7px; }
+.xcard .xl { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: #8c8c84; }
+.xcard .xv { font-size: 24px; font-weight: 600; color: #1c1c18; margin-top: 2px; }
+.xcard .xs { font-size: 12px; color: #8c8c84; margin-top: 1px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -115,10 +125,17 @@ def endlabel(fig, x, y, text, color=dz.FAINT):
     fig.add_annotation(x=x, y=y, text=text, showarrow=False, xanchor="left",
                        xshift=8, font=dict(size=12, color=color))
 
+# Streamlit 1.46+ sizes charts with `width`; older releases use
+# `use_container_width`. Picking the one this install supports avoids the
+# deprecation warning box on either version.
+import inspect
+_STRETCH = ({"width": "stretch"}
+            if "width" in inspect.signature(st.plotly_chart).parameters
+            else {"use_container_width": True})
+
 def chart(fig, h):
     fig.update_layout(height=h)
-    st.plotly_chart(fig, width="stretch",
-                    config={"displayModeBar": False})
+    st.plotly_chart(fig, config={"displayModeBar": False}, **_STRETCH)
 
 def spark(vals, color, w=76, h=20):
     lo, hi = min(vals), max(vals) + 1e-9
@@ -296,7 +313,7 @@ FREEZE = pd.Timestamp(dz.EVENTS[0][0])
 months = [pd.Timestamp(m) for m in sorted(declared.date.unique())]
 
 with tabC:
-    head, pick_country, pick_range = st.columns([3.3, 1.1, 1.8], gap="medium")
+    head, pick_country, pick_range = st.columns([3.2, 1.1, 1.9], gap="medium")
     with pick_country:
         banks = t12.index.tolist()                    # largest 12-month buyer first
         country = st.selectbox("Central bank", banks, index=0, key="explore_country")
@@ -304,7 +321,6 @@ with tabC:
         start, end = st.select_slider(
             "Months shown", options=months, value=(months[0], months[-1]),
             format_func=fmt, key="explore_months")
-    takeaway = head.empty()
 
     window = declared[declared.date.between(start, end)]
     mine = window[window.country == country].sort_values("date")
@@ -313,89 +329,102 @@ with tabC:
     totals = window.groupby("country").net_purchases_t.sum().sort_values(ascending=False)
     rank = totals.index.get_loc(country) + 1
     colour = dz.hue(country)
+    both_sides = len(before) > 0 and len(after) > 0
 
+    with head:
+        if both_sides:
+            line = (f"{country} averaged <b>{after.mean():+.1f} t</b> a month after "
+                    f"the freeze, against <b>{before.mean():+.1f} t</b> before it.")
+        else:
+            line = ("Widen the months shown to span February 2022 for a before "
+                    "and after comparison.")
+        st.markdown(f'<div class="xhead">Buying Before And After The Freeze</div>'
+                    f'<div class="xtake">{line}</div>', unsafe_allow_html=True)
+
+    # ---- summary cards ------------------------------------------------------
     def avg_text(series):
         return f"{series.mean():+.1f} t" if len(series) else "n/a"
 
-    if len(before) and len(after):
+    if both_sides:
         pace = after.mean() - before.mean()
-        pace_value, pace_sub = f"{pace:+.1f} t", "per month after freeze"
+        arrow = "▲" if pace > 0 else "▼"
+        pace_value, pace_sub = f"{arrow} {abs(pace):.1f} t", "per month after the freeze"
     else:
         pace_value, pace_sub = "n/a", "range misses one side"
 
     cards = [
-        ("Net change in range", f"{mine.net_purchases_t.sum():+,.0f} t",
-         f"{fmt(start)} to {fmt(end)}",
-         spark(mine.net_purchases_t.tolist(), colour) if len(mine) > 1 else ""),
-        ("Average before freeze", avg_text(before), f"per month, {len(before)} months", ""),
-        ("Average after freeze", avg_text(after), f"per month, {len(after)} months", ""),
-        ("Change in pace", pace_value, pace_sub, ""),
-        ("Rank among banks", f"{rank} of {len(totals)}", "by net change in range", ""),
+        ("Net Change", f"{mine.net_purchases_t.sum():+,.0f} t", f"{fmt(start)} to {fmt(end)}"),
+        ("Before Freeze", avg_text(before), f"monthly average, {len(before)} months"),
+        ("After Freeze", avg_text(after), f"monthly average, {len(after)} months"),
+        ("Change In Pace", pace_value, pace_sub),
+        ("Rank", f"{rank} of {len(totals)}", "banks by net change"),
     ]
-    tiles = "".join(f'<div class="kpi"><div class="l">{l}</div>'
-                    f'<div class="v">{v}<small>{s}</small></div>{sp}</div>'
-                    for l, v, s, sp in cards)
-    st.markdown(f'<div class="kpis" style="grid-template-columns: repeat(5, 1fr)">'
-                f'{tiles}</div>', unsafe_allow_html=True)
+    st.markdown('<div class="xcards">' + "".join(
+        f'<div class="xcard" style="border-left-color:{colour}">'
+        f'<div class="xl">{label}</div><div class="xv">{value}</div>'
+        f'<div class="xs">{sub}</div></div>' for label, value, sub in cards)
+        + "</div>", unsafe_allow_html=True)
 
     left, right = st.columns([3, 2], gap="large")
+
+    # ---- monthly purchases: timing for the chosen bank ------------------------
     with left:
         st.markdown(f'<p class="ctitle">Monthly Net Purchases For {country} '
                     '(Sample Data)</p>', unsafe_allow_html=True)
-        # monthly bars: full colour for buying, faded for selling, one hue per bank
-        f = go.Figure(go.Bar(
-            x=mine.date, y=mine.net_purchases_t,
-            marker_color=colour,
-            marker_opacity=[1 if v >= 0 else .45 for v in mine.net_purchases_t],
+        f = go.Figure()
+        x0 = start - pd.DateOffset(days=20)
+        x1 = end + pd.DateOffset(days=20)
+        if x0 < FREEZE < x1:                          # shade the months before the freeze
+            f.add_vrect(x0=x0, x1=FREEZE, fillcolor="#efede4", line_width=0, layer="below")
+            f.add_vline(x=FREEZE, line_color=dz.FAINT, line_width=1.2, line_dash="dot")
+            for x, anchor, text in [(FREEZE, "right", "Before Freeze  "),
+                                    (FREEZE, "left", "  After Freeze")]:
+                f.add_annotation(x=x, y=1.0, yref="paper", xanchor=anchor, yanchor="bottom",
+                                 text=text, showarrow=False,
+                                 font=dict(size=12, color=dz.FAINT))
+        f.add_trace(go.Bar(
+            x=mine.date, y=mine.net_purchases_t, marker_color=colour,
+            marker_opacity=[.55 if v >= 0 else .3 for v in mine.net_purchases_t],
             hovertemplate="%{x|%b %Y}: %{y:+.1f} t<extra></extra>"))
-        # dotted reference lines: the average month on each side of the freeze
-        for part in (before, after):
+        for part in (before, after):                  # average month on each side
             if len(part):
                 dates = mine.loc[part.index, "date"]
                 f.add_trace(go.Scatter(
                     x=[dates.min(), dates.max()], y=[part.mean()] * 2, mode="lines",
-                    line=dict(color=dz.INK, width=1.6, dash="dot"),
+                    line=dict(color=dz.INK, width=2.4),
                     hovertemplate=f"average {part.mean():+.1f} t<extra></extra>"))
-                f.add_annotation(x=dates.min(), y=part.mean(), xanchor="left", yshift=11,
-                                 text=f"average {part.mean():+.1f} t", showarrow=False,
-                                 bgcolor="rgba(251,251,248,.85)",
+                f.add_annotation(x=dates.max(), y=part.mean(), xanchor="right",
+                                 yshift=13, showarrow=False,
+                                 text=f"<b>Average {part.mean():+.1f} t</b>",
+                                 bgcolor="rgba(255,255,255,.9)", borderpad=2,
                                  font=dict(size=12, color=dz.INK))
-        events(f, label=True)
-        f.add_hline(y=0, line_color=dz.GHOST, line_width=1)
-        f.update_yaxes(title="Tonnes Per Month")
-        f.update_xaxes(range=[start - pd.DateOffset(days=20),
-                              end + pd.DateOffset(days=20)])
-        chart(f, 232)
-    with right:
-        st.markdown(f'<p class="ctitle">Cumulative Change Since {fmt(start)}</p>',
-                    unsafe_allow_html=True)
-        # cumulative lines: the chosen bank in its hue, the other banks in grey
-        cum = (window.sort_values("date")
-               .assign(cumulative=lambda t: t.groupby("country").net_purchases_t.cumsum()))
-        f = go.Figure()
-        for name, d in cum.groupby("country"):
-            chosen = name == country
-            f.add_trace(go.Scatter(
-                x=d.date, y=d.cumulative, mode="lines",
-                line=dict(color=colour if chosen else dz.GHOST,
-                          width=2.6 if chosen else 1.1),
-                hovertemplate=f"{name}: %{{y:+,.0f}} t<extra></extra>"))
-        last = cum[cum.country == country].iloc[-1]
-        endlabel(f, last.date, last.cumulative,
-                 f"<b>{country}</b><br>{last.cumulative:+,.0f} t", colour)
-        events(f, label=False)
         f.add_hline(y=0, line_color=dz.FAINT, line_width=1)
-        f.update_yaxes(title="Tonnes")
-        chart(f, 232)
+        f.update_yaxes(title="Tonnes Per Month", side="left", gridcolor="#ecebe4")
+        f.update_xaxes(range=[x0, x1], tickformat="%Y", dtick="M12")
+        f.update_layout(margin=dict(l=10, r=10, t=30, b=10), bargap=.25)
+        chart(f, 255)
 
-    with takeaway.container():
-        st.subheader("Buying Before And After The Freeze")
-        if len(before) and len(after):
-            st.caption(f"{country} after the freeze: {after.mean():+.1f} t a month, "
-                       f"against {before.mean():+.1f} t before it.")
-        else:
-            st.caption("Widen the months shown to span February 2022 for a "
-                       "before and after comparison.")
+    # ---- ranking: how the chosen bank compares over the same months -----------
+    with right:
+        st.markdown(f'<p class="ctitle">Net Change By Bank {fmt(start)} To {fmt(end)}</p>',
+                    unsafe_allow_html=True)
+        ranked = totals.sort_values()                 # largest at the top of the chart
+        chosen = ranked.index == country
+        f = go.Figure(go.Bar(
+            x=ranked.values, y=ranked.index, orientation="h",
+            marker_color=[colour if c else dz.GHOST for c in chosen],
+            text=[f"{v:+,.0f} t" for v in ranked.values], textposition="outside",
+            textfont=dict(size=11, color=[dz.INK if c else dz.FAINT for c in chosen]),
+            cliponaxis=False,
+            hovertemplate="%{y}: %{x:+,.0f} t<extra></extra>"))
+        f.add_vline(x=0, line_color=dz.FAINT, line_width=1)
+        # values are printed on the bars, so the x-axis is hidden to give rows room
+        f.update_xaxes(visible=False,
+                       range=[min(ranked.min(), 0) * 1.45, max(ranked.max(), 0) * 1.3])
+        f.update_yaxes(side="left", tickfont=dict(size=11.5), gridcolor=dz.PAPER,
+                       ticklabelstandoff=4)
+        f.update_layout(margin=dict(l=10, r=10, t=8, b=4), bargap=.28)
+        chart(f, 255)
 
 with st.expander("Sources, event dates and limits"):
     st.caption("Country Explorer compares average monthly purchases on each side of "
